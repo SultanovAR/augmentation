@@ -11,23 +11,25 @@ logger = get_logger(__name__)
 
 #прикрутить морфотегер от Алексея
 #он возвращает значения в universal... есть библиотека russian_tagsets которая переводит pymorphy тэги в universal...
+#гиперонимы
 class RuWordnet:
         
     def __init__(self, dir_path: str, with_source_token: bool=False):
-        url = "https://github.com/SultanovAR/___ruthes-lite2_download/archive/master.zip"    
+         
         url = 'http://files.deeppavlov.ai/datasets/ruthes-lite2.tar.gz'
+        url = "https://github.com/SultanovAR/___ruthes-lite2_download/archive/master.zip"   
 
-        dir_path = Path(expand_path(dir_path))
+        dir_path = Path(dir_path)
         required_files = ['text_entry.xml', 'synonyms.xml']
-        if not dir_path.exists()
+        if not dir_path.exists():
             dir_path.mkdir()
         
-        if not all((dir_path/f)/exists() for f in required_files):
+        if not all((dir_path/f).exists() for f in required_files):
             download_decompress(url, dir_path)
 
         self.with_source_token = with_source_token
-        self.entry_root = ET.parse(next(self.ruthes_path.rglob('text_entry.xml'))).getroot()
-        self.synonyms_root = ET.parse(next(self.ruthes_path.rglob('synonyms.xml'))).getroot()
+        self.entry_root = ET.parse(dir_path / 'text_entry.xml').getroot()
+        self.synonyms_root = ET.parse(dir_path / 'synonyms.xml').getroot()
         self.morph = pymorphy2.MorphAnalyzer()
     
     def _extract_morpho_requirements(self, tag: pymorphy2.analyzer.Parse):
@@ -74,79 +76,51 @@ class RuWordnet:
             synlist += list(map(lambda x: x.text, self.entry_root.findall(f"./entry[@id='{syn_entry_id}']/lemma")))
         return synlist
     
-    def _filter(synlist: List[str], init_form: pymorphy2.analyzer.Parse, source_token: str) -> List[str]:
+    def _filter(self, synlist: List[str], init_form: pymorphy2.analyzer.Parse, source_token: str) -> List[str]:
         init_form = self._extract_morpho_requirements(init_form)
-        synset = set()
-        for syn in filter(lambda x: len(x.split())) == 1, synlist):
+        filtered_synset = set()
+        for syn in filter(lambda x: len(x.split()) == 1, synlist):
             inflected_syn = self.morph.parse(syn)[0].inflect(init_form)
             if inflected_syn:
-                if not(self.with_source_token) and inflected_syn != source_token:
-                    synlist.update([inflected_syn.word])
+                if not(self.with_source_token) and inflected_syn.word != source_token:
+                    filtered_synset.update([inflected_syn.word])
                 elif self.with_source_token:
-                    synlist.update([inflected_syn.word])
-        return list(synset)
-
-    #def _find_filtered_synonyms(self, morphem):
-    #    #finds synonyms, filters them(len=1) and tries to infect it to right form
-    #    lemma = morphem.normal_form
-    #    init_form = self._extract_morpho_requirements(morphem.tag)
-    #    synlist = set()
-    #    for syn in filter(lambda x: len(x.split()) == 1, self._find_synonyms(lemma.upper())):
-    #        syn_inflected = self.morph.parse(syn)[0].inflect(init_form)
-    #        if syn_inflected:
-    #            if syn_inflected.word != morphem.word: #synlist without source token
-    #                synlist.update([syn_inflected.word])
-    #    return list(synlist) if synlist else None
+                    filtered_synset.update([inflected_syn.word])
+        return list(filtered_synset)
 
     def get_synlist(self, token: str, pos_tag: str=None) -> List[str]:
         if token:
-            morphem = self.morph.parse(x)[0]
+            morphem = self.morph.parse(token)[0]
             synonyms = self._find_synonyms(morphem.normal_form)
-            synonyms = self._filter(synonyms, morphem.tag, morphem.normal_form)
+            synonyms = self._filter(synonyms, morphem.tag, token)
             return synonyms
 
-    #def get_synset(self, prep_tokens: List[str], source_pos_tag: List[str]=None) -> List[List[str]]:
-    #    """Generating list of synonyms for each token in prep_tokens, that isn't equal to None
-    #        Args:
-    #            prep_tokens: preprocessed soucrce_tokens, where all tokens that do not need to search for synonyms are replaced by None
-    #            source_pos_tag: pos tags for source sentence, in nltk.pos_texitag format
-    #        Return:
-    #            List of list of synonyms without source token, for tokens for which no synonyms were found, return None
-    #    """
-    #    morphems = list(map(lambda x: self.morph.parse(x)[0] if x else None, prep_tokens))
-#
-    #    result = list(map(lambda x: self._find_filtered_synonyms(x) if x else None, morphems))
-    #    return result
-
 if __name__ == "__main__":
-    print("""Testing the module "RuSyn" """)
-    import shutil
-    shutil.rmtree(Path(expand_path('./ruthes')), ignore_errors=True)
+    print(RuWordnet('ruthes', True).get_synlist('адский'))
+    #test 1: Downloading necessary data
+    #import shutil
+    #shutil.rmtree(Path('ruthes'), ignore_errors=True)
+    #RuWordnet('ruthes')
 
-    #1 download data
-    ru = RuSyn('./ruthes')
+    #test 2: if token == None, then algorithm returns None
+    assert RuWordnet('ruthes').get_synlist(None) == None
 
-    #2 Read from existing dir
-    ru = RuSyn('./ruthes')
+    #test 3: it finds right synonyms and doesn't return source token
+    #the reference list with synonyms was taken from http://www.labinform.ru/pub/ruthes/c/01/000/124951.htm
+    assert RuWordnet('ruthes').get_synlist('адский') == ['кромешный']
 
-    #3 checking synset for lemma "РАБ"
-    # The right synset were taken from 
-    # http://www.labinform.ru/pub/ruthes/te/17/001/172506.htm
-    assert set(['НЕВОЛЬНИК', 'НЕВОЛЬНИЦА', 'НЕВОЛЬНИЧИЙ', 'РАБ', 'РАБСКИЙ', 'РАБЫНЯ']) == set(ru._find_synonyms('РАБ'))
+    #test 4: it finds right synonyms and return source token
+    #the reference list with synonyms was taken from http://www.labinform.ru/pub/ruthes/c/01/000/124951.htm
+    assert set(RuWordnet('ruthes', True).get_synlist('адский')) == set(['адский', 'кромешный'])
+    
+    #test 5: checking synset for lemma "РАБ"
+    # The right synset was taken from http://www.labinform.ru/pub/ruthes/te/17/001/172506.htm
+    assert set(['НЕВОЛЬНИК', 'НЕВОЛЬНИЦА', 'НЕВОЛЬНИЧИЙ', 'РАБ', 'РАБСКИЙ', 'РАБЫНЯ']) == set(RuWordnet('ruthes')._find_synonyms('РАБ'))
 
-    #4 checking synset for lemma "ЩЕБЕНЬ"
-    assert set(['ЩЕБЕНКА', 'ЩЕБЕНОЧНЫЙ', 'ЩЕБЕНЬ', 'ЩЕБНЕВОЙ', 'ЩЕБНЕВЫЙ']) == set(ru._find_synonyms('ЩЕБЕНЬ'))
+    #test 6: checking synset for lemma "ЩЕБЕНЬ"
+    # The right synset was taken from http://www.labinform.ru/pub/ruthes/te/17/001/172506.htm
+    assert set(['ЩЕБЕНКА', 'ЩЕБЕНОЧНЫЙ', 'ЩЕБЕНЬ', 'ЩЕБНЕВОЙ', 'ЩЕБНЕВЫЙ']) == set(RuWordnet('ruthes')._find_synonyms('ЩЕБЕНЬ'))
 
-    #5 checking result synset for "прочитана"
-    assert set(['дочитана', 'прочтена']) == set(ru.get_synset(['прочитана'], ['прочитана'])[0])
-    # example of using
-    #print(5, ru._find_synonyms('СЦЕНА'))  
-    #print(ru.get_synset(['раб', 'щебнем', 'три'], ['раб', 'щебнем', 'три']))
-    #print(ru.get_synset(['прочитанная', 'прочитана', 'прочитав'], ['прочитанная', 'прочитана', 'прочитав']))
-    #print(ru.get_synset(['лучше', 'год', 'слово'], ['лучше', 'год', 'слово']))
-    #print(ru.get_synset(['преподавая', 'славистику', 'русскому'], ['преподавая', 'славистику', 'русскому']))
-    #print(ru.get_synset(['сцены', 'конкретного', 'тривиальность'], ['сцены', 'конкретного', 'тривиальность']))
-    #print(ru.get_synset(['сексуальную', 'распущенность', 'надрыв'], ['сексуальную', 'распущенность', 'надрыв']))
-    #print(ru.get_synset(['чувства', 'сумасшедшем', 'кротким'], ['чувства', 'сумасшедшем', 'кротким']))
-    #print(ru.get_synset(['определено', 'передает', 'писал'], ['определено', 'передает', 'писал']))
-    #print(ru.get_synset(['быть', 'бытие', 'означает'], ['быть', 'бытие', 'означает']))
+    #test 7: checking result synset for "прочитана"
+    # The right synset was taken from http://www.labinform.ru/pub/ruthes/te/17/001/172506.htm
+    assert set(['дочитана', 'прочтена']) == set(RuWordnet('ruthes').get_synlist('прочитана'))
