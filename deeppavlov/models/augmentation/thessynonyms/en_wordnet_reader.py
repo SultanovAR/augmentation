@@ -7,7 +7,7 @@ import nltk
 from nltk.corpus import wordnet as wn
 from nltk import pos_tag
 
-class EnSynWordnet:
+class EnWordnet:
     """
     It finds synonyms for each token in given list, for english language
     - 'None' token doesn't processing
@@ -25,143 +25,108 @@ class EnSynWordnet:
         wn_tag_to_pattern:   vocabulary between pos_tags in wordnet and pos_tags in pattern
     """
 
-    def _download(self):
-        """download all neccesary data"""
-        nltk.download('wordnet')
-
-    def __init__(self, classical_pluralize: bool=True):
+    def __init__(self, with_source_token: bool=False, classical_pluralize: bool=True):
         self.classical_pluralize = classical_pluralize
         self.wn_tag_to_pattern = {wn.VERB: VERB, wn.NOUN: NOUN, wn.ADJ: ADJECTIVE, wn.ADV: ADVERB}
-        self._download()
+        self.with_source_token = with_source_token
+        #nltk.download('wordnet')   #Надо ли
 
-    def _find_synonyms(self, token_morph: Tuple[dict, str]):
-        #if not noun
-        if token_morph:
-            #if token pos in [noun, adj, adv, verb]
-            if token_morph[0]:
-                synonyms = set()
-                wn_synsets = wn.synsets(token_morph[1], pos=token_morph[0]['pos'])
-                #for adjective, it finds Adjective satellites, that connected with this adjective
-                if token_morph[0]['pos'] == wn.ADJ:
-                    wn_synsets = wn_synsets.extend(wn.synsets(token_morph[1], pos='s'))
-                for synset in wn_synsets:
-                    for synset_lemma in synset.lemmas():
-                        if synset_lemma.name() != token_morph[1]:
-                            synonyms.update([synset_lemma.name()])
+    def _find_synonyms(self, lemma: str, pos_tag: str) -> List[str]:
+        if pos_tag:    #if token pos in [noun, adj, adv, verb]
+            synonyms = set()
+            wn_synsets = wn.synsets(lemma, pos=pos_tag)
+            if pos_tag == wn.ADJ:    #for adjective, it finds Adjective satellites, that connected with this adjective
+                wn_synsets = wn_synsets.extend(wn.synsets(lemma, pos='s'))
+            for synset in wn_synsets:
+                if self.with_source_token:
+                    syn = [synset_lemma.name() for synset_lemma in synset.lemmas()]
+                else:
+                    syn = [synset_lemma.name() for synset_lemma in synset.lemmas() if synset_lemma.name() != lemma]
+                synonyms.update(syn)
             return list(synonyms)
+        else:
+            None
 
-    def _lemmatize(self, token: str, pos_tag: Tuple[str, str]) -> List[str]:
-        if token:
-            init_form = defaultdict(bool)
-            lemma = token
-            if pos_tag[1].startswith('N'):
-                lemma = en.inflect.singularize(token)
-                init_form.update({'pos': wn.NOUN, 'plur': pos_tag[1].endswith('S')})
-
-            elif pos_tag[1].startswith('V'):
-                lemma = en.lemma(token)
-                init_form.update({'pos': wn.VERB, 'tense': en.tenses(token)[0]})
-
-            elif pos_tag[1].startswith('J'):
-                is_plur = en.inflect.pluralize(token, pos=ADJECTIVE, classical=self.classical_pluralize) == token
-                init_form.update({'pos': wn.ADJ, 'comp': pos_tag[1].endswith('R'), 'supr': pos_tag[1].endswith('S'), 'plur': is_plur})
-
-            elif pos_tag[1].startswith('R'):
-                init_form.update({'pos': wn.ADV, 'comp': pos_tag[1].endswith('R'), 'supr': pos_tag[1].endswith('S')})
-
-            return init_form, lemma
+    def _lemmatize(self, token: str, pos_tag: str) -> List[str]:
+        init_form, lemma = defaultdict(bool), token
+        if pos_tag.startswith('N'):
+            lemma = en.inflect.singularize(token)
+            init_form.update({'pos': wn.NOUN, 'plur': pos_tag.endswith('S')})
+        elif pos_tag.startswith('V'):
+            lemma = en.lemma(token)
+            init_form.update({'pos': wn.VERB, 'tense': en.tenses(token)[0]})
+        elif pos_tag.startswith('J'):
+            is_plur = en.inflect.pluralize(token, pos=ADJECTIVE, classical=self.classical_pluralize) == token
+            init_form.update({'pos': wn.ADJ, 'comp': pos_tag.endswith('R'), 'supr': pos_tag.endswith('S'), 'plur': is_plur})
+        elif pos_tag.startswith('R'):
+            init_form.update({'pos': wn.ADV, 'comp': pos_tag.endswith('R'), 'supr': pos_tag.endswith('S')})
+        return init_form, lemma
     
-    def _inflect_to_init_form(self, token, init_form):
-        #it inflect only the first word in phrases
-        token = token.split('_')
+    def _inflect_to_init_form(self, token: str, init_form: str) -> str:
+        token = token.split('_')    #it inflect only the first word in phrases
         if init_form['plur']:
             token[0] = en.inflect.pluralize(token[0], pos=self.wn_tag_to_pattern[init_form['pos']], classical=self.classical_pluralize)
         if init_form['tense']:
             token[0] = en.conjugate(token[0], init_form['tense'])
         if init_form['comp']:
             token[0] = en.inflect.comparative(token[0])
-            # if added 'more' or 'most' then need delete it
-            if len(token[0].split()) == 2:
+            if len(token[0].split()) == 2:  # if added 'more' or 'most' then need delete it
                 token[0] = token[0].split()[1]
         if init_form['supr']:
             token[0] = en.inflect.superlative(token[0])
-            # if added 'more' or 'most' then need delete it
-            if len(token[0].split()) == 2:
+            if len(token[0].split()) == 2:  # if added 'more' or 'most' then need delete it
                 token[0] = token[0].split()[1]
         return " ".join(token)
-        
-    def _unlemmatize(self, synonyms_for_one_token, token_morph):
-        if synonyms_for_one_token:
-            synset = set(map(self._inflect_to_init_form, synonyms_for_one_token, repeat(token_morph[0], len(synonyms_for_one_token))))
-            return list(synset)
-
-    def get_synset(self, prep_tokens: List[str], source_pos_tag: List[str]) -> List[List[str]]:
+    
+    def get_synlist(self, token: str, pos_tag: str) -> List[str]:
         """
-        Generating list of synonyms for each token in prep_tokens, that isn't equal to None
+        Generating list of synonyms for token
         - 'None' token doesn't processing
         - it finds synonyms only for noun, adjective, verb, adverb
-        - it finds synonyms exclude source token
+        - it finds synonyms exclude source token, if param with_source_token == False
         - for adjective, adjective satellite is included also in list of synonyms
         - all output synonyms are inflected to the source token form
         - all output words are in lowercase
         - errors in inflection are possible(pattern.en)
         Args:
-            prep_tokens: preprocessed source tokens, where all tokens that do not need to search for synonyms are replaced by None
-            source_pos_tag: pos tags for source sentence, in nltk.pos_tag format
+            token: for that token will be searched synonyms
+            pos_tag: pos tags for token, in nltk.pos_tag format
         Return:
-            List of list of synonyms without source token, for tokens for which no synonyms were found, return None
+            List of synonyms, if no synonyms were found, return None
         """
-        tokens_morph = list(map(self._lemmatize, prep_tokens, source_pos_tag))
-        #find synonyms excluding the source word
-        list_synonyms = list(map(self._find_synonyms, tokens_morph))
-        #inflect and return synonyms
-        return list(map(self._unlemmatize, list_synonyms, tokens_morph))
+        if token:
+            init_form, lemma = self._lemmatize(token, pos_tag)
+            synonyms = self._find_synonyms(lemma, init_form['pos'])
+            if synonyms:
+                synonyms = set(map(self._inflect_to_init_form, synonyms, repeat(init_form, len(synonyms))))
+                return list(synonyms)
+            else:
+                return None
+        else:
+            return None
 
 if __name__ == '__main__':
-    from nltk import word_tokenize
-    ensyn_test = EnSynWordnet()
-    #test: Finding the correct list of synonoms for noun,
+    #test 1: Finding the correct list of synonoms for noun,
     # the reference list was taken from the site
     # http://wordnetweb.princeton.edu/perl/webwn?s=eat&sub=Search+WordNet&o2=&o0=1&o8=1&o1=1&o7=&o5=&o9=&o6=&o3=&o4=&h=00000000
-    test_sentence = 'frog'
-    test_sentence = word_tokenize(test_sentence)
-    pos_test_sentece = pos_tag(test_sentence)
-    res = list(map(lambda x: x.lower(), ensyn_test.get_synset(test_sentence, test_sentence, pos_test_sentece)[0]))
-    assert set(res) ==  set(['toad', 'toad frog', 'anuran', 'batrachian', 'salientian', 'gaul'])
+    assert set(EnWordnet().get_synlist('frog', 'NN')) == set(['toad', 'toad frog', 'anuran', 'batrachian', 'salientian', 'Gaul'])
 
-    #test: inflect of noun
-    test_sentence = 'frogs'
-    test_sentence = word_tokenize(test_sentence)
-    pos_test_sentece = pos_tag(test_sentence)
-    res = list(map(lambda x: x.lower(), ensyn_test.get_synset(test_sentence, test_sentence, pos_test_sentece)[0]))
-    assert set(res) == set(['toads', 'toads frog', 'anurans', 'batrachians', 'salientians', 'gauls'])
-    
-    #test: elements in prep list that marked by None don't proceced
-    test_sentence = 'frog frogs'
-    test_sentence = word_tokenize(test_sentence)
-    pos_test_sentece = pos_tag(test_sentence)
-    res = ensyn_test.get_synset(test_sentence, [None, None], pos_test_sentece)
-    assert set(res) ==  set([None, None])
+    #test 2: if pos_tag not is in right format then return None
+    assert EnWordnet().get_synlist('frog', 'ASDFfsdf') == None
 
-    #inflect verb
-    """
-    module pattern.en can't inflect feed to fed, so test passing 'conditionaly'
-    """
-    test_sentence = 'you ate'
-    test_sentence = word_tokenize(test_sentence)
-    pos_test_sentece = pos_tag(test_sentence)
-    res = ensyn_test.get_synset(test_sentence, [None, 'ate'], pos_test_sentece)[1]
-    res = list(map(lambda x: x.lower(), res))
-    ref = ['feed', 'ate on', 'consumed',\
-             'ate up', 'used up', 'depleted',\
-            'exhausted', 'ran through', 'wiped out',\
-            'corroded', 'rusted']
-    assert set(res) == set(ref)
- 
-    #return None when synonyms don't found
-    test_sentence = "you're fluffest"
-    test_sentence = word_tokenize(test_sentence)
-    pos_test_sentece = pos_tag(test_sentence)
-    res = ensyn_test.get_synset(test_sentence, [None, None, 'fluffest'], pos_test_sentece)
-    ref = [None, None, None]
-    assert res == ref
+    #test 3: inflect of noun
+    assert set(EnWordnet().get_synlist('frogs', 'NNS')) == set(['toads', 'toads frog', 'anurans', 'batrachians', 'salientians', 'Gauls'])
+
+    #test 4: process None token
+    assert EnWordnet().get_synlist(None, 'NNS') == None
+
+    #test 5: return None when synonyms don't found
+    assert EnWordnet().get_synlist('Abrsdfl', 'NN') == None
+
+    #test 6: inflect verb
+    # the reference list was taken from the site
+    # http://wordnetweb.princeton.edu/perl/webwn?s=eat&sub=Search+WordNet&o2=&o0=1&o8=1&o1=1&o7=&o5=&o9=&o6=&o3=&o4=&h=00000000
+    assert set(EnWordnet().get_synlist('ate', 'VB')) == set(['feed', 'ate on', 'consumed',\
+                                                             'ate up', 'used up', 'depleted',\
+                                                             'exhausted', 'ran through', 'wiped out',\
+                                                             'corroded', 'rusted'])
